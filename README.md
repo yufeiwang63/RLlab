@@ -12,7 +12,7 @@ currently implemented:
 ------------------------
 # install:
 
-git clone 
+git clone https://github.com/yufeiwang63/RLlab.git
 
 ----------------------
 # run:
