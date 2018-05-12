@@ -1,6 +1,6 @@
 # RLlab
 ------------------------
-some implementations of the RL algorithms using mainly pytorch.
+some implementations of the RL algorithms using mainly pytorch.  
 currently implemented:
 ------------------------------
 
