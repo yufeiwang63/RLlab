@@ -5,22 +5,24 @@ import numpy as np
 import random
 from collections import deque
 from torch_networks import NAF_network
+from helper_functions import SlidingMemory, PERMemory
+
 
 
 
 class NAF():    
     def __init__(self, state_dim, action_dim, mem_size, train_batch_size, gamma, lr,
-                 action_high, action_low, tau, noise, flag):
+                 action_low, action_high, tau, noise, flag, if_PER = True):
         self.mem_size, self.train_batch_size = mem_size, train_batch_size
         self.gamma, self.lr = gamma, lr
         self.global_step = 0
         self.tau, self.explore = tau, noise
         self.state_dim, self.action_dim = state_dim, action_dim
         self.action_high, self.action_low = action_high, action_low
-        self.replay_mem = deque()
+        self.if_PER = if_PER
+        self.replay_mem = PERMemory(mem_size) if if_PER else SlidingMemory(mem_size)
         #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = 'cpu'
-        self.cret = nn.MSELoss()
         self.policy_net = NAF_network(state_dim, action_dim, action_low, action_high).to(self.device)
         self.target_net = NAF_network(state_dim, action_dim,action_low, action_high).to(self.device)
         self.optimizer = optim.Adam(self.policy_net.parameters(), self.lr)
@@ -40,16 +42,20 @@ class NAF():
     #  training process                          
     def train(self, pre_state, action, reward, next_state, if_end):
         
-        self.perceive(pre_state, action, reward, next_state, if_end)
+        self.replay_mem.add(pre_state, action, reward, next_state, if_end)
         
-        if len(self.replay_mem) < self.mem_size:
+        if self.replay_mem.num() < self.mem_size:
             return
         
         self.explore.decaynoise()
         
         
         # sample $self.train_batch_size$ samples from the replay memory, and use them to train
-        train_batch = random.sample(self.replay_mem, self.train_batch_size)
+        if not self.if_PER:
+            train_batch = self.replay_mem.sample(self.train_batch_size)
+        else:
+            train_batch, idx_batch, weight_batch = self.replay_mem.sample(self.train_batch_size)
+            weight_batch = torch.tensor(weight_batch, dtype = torch.float).unsqueeze(1)
         
         # adjust dtype to suit the gym default dtype
         pre_state_batch = torch.tensor([x[0] for x in train_batch], dtype=torch.float, device = self.device) 
@@ -68,8 +74,16 @@ class NAF():
 
         q_pred = self.policy_net(pre_state_batch, action_batch)
         
+        if self.if_PER:
+            TD_error_batch = np.abs(q_target.numpy() - q_pred.detach().numpy())
+            self.replay_mem.update(idx_batch, TD_error_batch)
+        
         self.optimizer.zero_grad()
-        loss = self.cret(q_pred, q_target)
+        loss = (q_pred - q_target) ** 2 
+        if self.if_PER:
+            loss *= weight_batch
+            
+        loss = torch.mean(loss)
         if self.flag:
             loss -= q_pred.mean() # to test one of my ideas
         loss.backward()
@@ -97,14 +111,15 @@ class NAF():
         
     
     # use the policy net to choose the action with the highest Q value
-    def action(self, s, noise = 0.0):
+    def action(self, s, add_noise = True):
         s = torch.tensor(s, dtype=torch.float, device = self.device).unsqueeze(0)
         with torch.no_grad():
             _, action = self.policy_net(s) 
         
-        noise = self.explore.noise()
+        noise = self.explore.noise() if add_noise else 0.0
         # use item() to get the vanilla number instead of a tensor
-        #return [np.clip(np.random.normal(action.item(), self.explore_rate), self.action_low, self.action_high)]
-        return [np.clip(action.item() + noise, self.action_low, self.action_high)]
+        #return [np.clip(np.random.normal(action.item(), self.explore_rate), self.action_low, self.action_high)ac]
+        #print(action.numpy()[0])
+        return np.clip(action.numpy()[0] + noise, self.action_low, self.action_high)
     
     

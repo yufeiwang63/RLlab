@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributions as tds
 
 
 class NAF_network(nn.Module):
@@ -59,16 +60,44 @@ class NAF_network(nn.Module):
         
         
 class DQN_fc_network(nn.Module):
-        def __init__(self, input_dim, output_dim):
+        def __init__(self, input_dim, output_dim, hidden_layers):
             super(DQN_fc_network, self).__init__()
-            self.fc1 = nn.Linear(input_dim, 30)
-            self.fc2 = nn.Linear(30, output_dim)
+            
+            self.fc_in = nn.Linear(input_dim, 32)
+            self.fc_hiddens = [nn.Linear(32,32) for i in range(hidden_layers)]
+            self.fc_out = nn.Linear(32, output_dim)
             
         def forward(self, x):
-            x = F.relu(self.fc1(x))
-            x = self.fc2(x)
+            x = F.relu(self.fc_in(x))
+            for layer in self.fc_hiddens:
+                x = F.relu(layer(x))
+            x = self.fc_out(x)
             return x
         
+class DQN_dueling_network(nn.Module):
+        def __init__(self, input_dim, output_dim, hidden_layers):
+            super(DQN_dueling_network, self).__init__()
+            self.fc_in = nn.Linear(input_dim, 32)
+            self.fc_hiddens = [nn.Linear(32,32) for i in range(hidden_layers - 1)]
+            
+            self.fca_before = nn.Linear(32, 16)
+            self.fcv_before = nn.Linear(32, 16)
+            self.fca = nn.Linear(16, output_dim)
+            self.fcv = nn.Linear(16, 1)
+            
+        def forward(self, x):
+            x = F.relu(self.fc_in(x))
+            
+            for layer in self.fc_hiddens:
+                x = F.relu(layer(x))
+            
+            a = F.relu(self.fca_before(x))
+            a = self.fca(a)
+            a -= a.mean()
+            v = F.relu(self.fcv_before(x))
+            v = self.fcv(v)
+            q = a + v
+            return q        
 
 class DDPG_critic_network(nn.Module):
     
@@ -145,6 +174,26 @@ class AC_a_fc_network(nn.Module):
             x = self.fc3(x)
             
             return F.softmax(x, dim = 1)
+        
+class CAC_a_fc_network(nn.Module):
+    def __init__(self, input_dim, output_dim, action_low, action_high):
+        super(CAC_a_fc_network, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 32)
+        self.fc2 = nn.Linear(32, 32)
+        self.fc3 = nn.Linear(32, output_dim)
+        
+        self.sigma = torch.ones((output_dim))
+        self.action_low, self.action_high = action_low, action_high
+    
+    def forward(self, s):
+        s = F.relu(self.fc1(s))
+        s = F.relu(self.fc2(s))
+        mu = self.fc3(s)
+        mu = torch.clamp(mu, self.action_low, self.action_high)
+        
+        m = tds.normal.Normal(loc = mu, scale = self.sigma)
+        
+        return m
         
 
         

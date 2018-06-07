@@ -1,0 +1,16 @@
+--------------episode  100 average reward:  9.2 ---------------
+--------------episode  200 average reward:  9.3 ---------------
+--------------episode  300 average reward:  9.6 ---------------
+--------------episode  400 average reward:  9.6 ---------------
+--------------episode  500 average reward:  9.2 ---------------
+--------------episode  600 average reward:  9.1 ---------------
+--------------episode  700 average reward:  9.1 ---------------
+--------------episode  800 average reward:  9.7 ---------------
+--------------episode  900 average reward:  9.8 ---------------
+--------------episode  1000 average reward:  9.6 ---------------
+--------------episode  1100 average reward:  9.4 ---------------
+--------------episode  1200 average reward:  9.4 ---------------
+--------------episode  1300 average reward:  72.5 ---------------
+--------------episode  1400 average reward:  169.6 ---------------
+--------------episode  1500 average reward:  200.0 ---------------
+----- using  1500   epoaches

@@ -5,37 +5,35 @@ import torch.optim as optim
 import numpy as np
 import random
 from collections import deque
-from torch_networks import AC_a_fc_network, AC_v_fc_network
+from torch_networks import AC_a_fc_network, AC_v_fc_network, CAC_a_fc_network
+from helper_functions import SlidingMemory, PERMemory
 import warnings
-import os
 
 warnings.simplefilter("error", RuntimeWarning)
 
         
 
 class AC():    
-    def __init__(self, state_dim, action_dim, mem_size, train_batch_size, gamma, actor_lr, critic_lr,  tau):
+    def __init__(self, state_dim, action_dim, mem_size, train_batch_size, gamma, actor_lr, critic_lr, 
+                 tau, if_PER = True):
         self.mem_size, self.train_batch_size = mem_size, train_batch_size
         self.gamma, self.actor_lr, self.critic_lr = gamma, actor_lr, critic_lr
         self.global_step = 0
-        self.tau = tau
+        self.tau, self.if_PER = tau, if_PER
         self.state_dim, self.action_dim = state_dim, action_dim
-        self.replay_mem = deque()
+        self.replay_mem = PERMemory(mem_size) if if_PER else SlidingMemory(mem_size)
         #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = 'cpu'
         self.cret = nn.MSELoss()
         self.actor_policy_net = AC_a_fc_network(state_dim, action_dim).to(self.device)
         self.actor_target_net = AC_a_fc_network(state_dim, action_dim).to(self.device)
-        #self.critic_policy_net = DDPG_critic_network(state_dim, action_dim).to(self.device)
-        #self.critic_target_net = DDPG_critic_network(state_dim, action_dim).to(self.device)
         self.critic_policy_net = AC_v_fc_network(state_dim).to(self.device)
         self.critic_target_net = AC_v_fc_network(state_dim).to(self.device)
         self.actor_optimizer = optim.Adam(self.actor_policy_net.parameters(), self.actor_lr)
         self.critic_optimizer = optim.Adam(self.critic_policy_net.parameters(), self.critic_lr)
         self.hard_update(self.actor_target_net, self.actor_policy_net)
         self.hard_update(self.critic_target_net, self.critic_policy_net)
-        
-        self.parameter_record = deque()
+    
     
     
     def soft_update(self, target, source, tau):
@@ -49,13 +47,17 @@ class AC():
     #  training process                          
     def train(self, pre_state, action, reward, next_state, if_end):
         
-        self.perceive(pre_state, action, reward, next_state, if_end)
+        self.replay_mem.add(pre_state, action, reward, next_state, if_end)
         
-        if len(self.replay_mem) < self.train_batch_size:
+        if self.replay_mem.num() < self.mem_size:
             return
         
         # sample $self.train_batch_size$ samples from the replay memory, and use them to train
-        train_batch = random.sample(self.replay_mem, self.train_batch_size)
+        if not self.if_PER:
+            train_batch = self.replay_mem.sample(self.train_batch_size)
+        else:
+            train_batch, idx_batch, weight_batch = self.replay_mem.sample(self.train_batch_size)
+            weight_batch = torch.tensor(weight_batch, dtype = torch.float).unsqueeze(1)
         
         # adjust dtype to suit the gym default dtype
         pre_state_batch = torch.tensor([x[0] for x in train_batch], dtype=torch.float, device = self.device) 
@@ -66,6 +68,7 @@ class AC():
         if_end = [x[4] for x in train_batch]
         if_end = torch.tensor(np.array(if_end).astype(float),device = self.device, dtype=torch.float).view(self.train_batch_size,1)
         
+        
         # use the target_Q_network to get the target_Q_value
         with torch.no_grad():
             v_next_state = self.critic_target_net(next_state_batch).detach()
@@ -73,25 +76,35 @@ class AC():
 
         v_pred = self.critic_policy_net(pre_state_batch)
         
+        if self.if_PER:
+            TD_error_batch = np.abs(v_target.numpy() - v_pred.detach().numpy())
+            self.replay_mem.update(idx_batch, TD_error_batch)
+        
         self.critic_optimizer.zero_grad()
-        closs = self.cret(v_pred, v_target)
+        closs = (v_pred - v_target) ** 2 
+        if self.if_PER:
+            closs *= weight_batch
+        closs = closs.mean()
         closs.backward()
         torch.nn.utils.clip_grad_norm_(self.critic_policy_net.parameters(),1)
         self.critic_optimizer.step()
         
         
         self.actor_optimizer.zero_grad()
+        
+    
         action_prob = self.actor_policy_net(pre_state_batch).gather(1, action_batch.unsqueeze(1))
-       
+        log_action_prob = torch.log(action_prob.clamp(min = 1e-15))
+   
         with torch.no_grad(): 
             v_next_state = self.critic_policy_net(next_state_batch).detach()
             v_target = self.gamma * v_next_state * (1 - if_end) + reward_batch
-            self.TD_error = v_target - self.critic_policy_net(pre_state_batch).detach()
+            TD_error = v_target - self.critic_policy_net(pre_state_batch).detach()
         
-        aloss = - action_prob.clamp(min = 1e-15) * self.TD_error
-        self.aloss = aloss.mean()
+        aloss = - log_action_prob * TD_error
+        aloss = aloss.mean()
  
-        self.aloss.backward()
+        aloss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor_policy_net.parameters(),1)
         self.actor_optimizer.step()
     
@@ -108,13 +121,12 @@ class AC():
         
     
     # use the policy net to choose the action with the highest Q value
-    def action(self, s):
+    def action(self, s, sample = True): # use flag to suit other models' action interface
         s = torch.tensor(s, dtype=torch.float, device = self.device).unsqueeze(0)
         with torch.no_grad():
             action_prob = self.actor_policy_net(s) 
-        
             return np.random.choice(self.action_dim, p = action_prob.numpy()[0])
-     
+
     
         
     
